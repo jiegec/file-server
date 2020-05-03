@@ -95,6 +95,14 @@ int main(int argc, char *argv[]) {
       }
     }
 
+    // set reuseaddr
+    int on = 1;
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) < 0) {
+      close(fd);
+      perror("setsockopt");
+      continue;
+    }
+
     // bind
     if (bind(fd, p->ai_addr, p->ai_addrlen) < 0) {
       close(fd);
@@ -168,7 +176,9 @@ int main(int argc, char *argv[]) {
         eprintf("fd %d got error\n", events[i].data.fd);
         close(events[i].data.fd);
         continue;
-      } else if (events[i].events & EPOLLIN) {
+      }
+
+      if (events[i].events & EPOLLIN) {
         SocketState &s = state[events[i].data.fd];
         if (s.is_listen) {
           // accept all incoming sockets
@@ -218,7 +228,7 @@ int main(int argc, char *argv[]) {
             // add to epoll
             struct epoll_event event;
             event.data.fd = fd;
-            event.events = EPOLLIN | EPOLLET;
+            event.events = EPOLLIN | EPOLLRDHUP | EPOLLET;
             if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event) < 0) {
               close(fd);
               perror("epoll_ctl");
@@ -235,6 +245,13 @@ int main(int argc, char *argv[]) {
         } else {
           // client
         }
+      }
+
+      if (events[i].events & EPOLLRDHUP) {
+        // remote closed connection
+        printf("remote closed connection\n");
+        state.erase(events[i].data.fd);
+        close(events[i].data.fd);
       }
     }
   }
