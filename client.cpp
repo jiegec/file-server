@@ -42,6 +42,13 @@ int main(int argc, char *argv[]) {
             argv[0]);
     return 1;
   }
+
+  int file_fd = open(argv[4], O_WRONLY | O_CREAT | O_EXCL, 0644);
+  if (file_fd < 0) {
+    perror("open");
+    return 1;
+  }
+
   struct addrinfo hints, *res;
   memset(&hints, 0, sizeof(hints));
   hints.ai_family = AF_UNSPEC;
@@ -49,12 +56,6 @@ int main(int argc, char *argv[]) {
   int error = getaddrinfo(argv[1], argv[2], &hints, &res);
   if (error != 0) {
     eprintf("getaddrinfo: %s\n", gai_strerror(error));
-    return 1;
-  }
-
-  int file_fd = open(argv[4], O_WRONLY | O_CREAT);
-  if (file_fd < 0) {
-    perror("open");
     return 1;
   }
 

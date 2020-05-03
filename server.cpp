@@ -8,6 +8,7 @@
 #include <string>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <sys/sendfile.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
@@ -362,6 +363,24 @@ int main(int argc, char *argv[]) {
                 } else {
                   // finish
                   s.state = State::WaitForCommand;
+                }
+              }
+            }
+
+            if (s.state == State::SendFile) {
+              for (;;) {
+                int res = sendfile(s.fd, s.file_fd, NULL, 0xFFFFFFFF);
+                if (res == 0) {
+                  // EOF
+                  close(s.file_fd);
+                  s.state = State::WaitForCommand;
+                  break;
+                } else if (res < 0) {
+                  if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    break;
+                  }
+                  // error handling
+                  break;
                 }
               }
             }
