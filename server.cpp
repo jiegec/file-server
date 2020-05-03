@@ -7,8 +7,8 @@
 #include <string.h>
 #include <string>
 #include <sys/epoll.h>
-#include <sys/socket.h>
 #include <sys/sendfile.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
@@ -47,6 +47,9 @@ int read_exact(struct SocketState &state, size_t len) {
   char buffer[128];
   while (read_len < len) {
     int res = read(state.fd, buffer, std::min(sizeof(buffer), len - read_len));
+    if (res == 0) {
+      break;
+    }
     if (res < 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
         break;
@@ -143,7 +146,7 @@ int main(int argc, char *argv[]) {
     // add to epoll
     struct epoll_event event;
     event.data.fd = fd;
-    event.events = EPOLLIN | EPOLLOUT | EPOLLET;
+    event.events = EPOLLIN | EPOLLET;
     if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event) < 0) {
       close(fd);
       perror("epoll_ctl");

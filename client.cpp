@@ -43,7 +43,7 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  int file_fd = open(argv[4], O_WRONLY | O_CREAT | O_EXCL, 0644);
+  int file_fd = open(argv[4], O_WRONLY | O_CREAT, 0644);
   if (file_fd < 0) {
     perror("open");
     return 1;
