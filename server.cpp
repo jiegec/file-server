@@ -148,6 +148,12 @@ int main(int argc, char *argv[]) {
     ss.is_listen = true;
     state[fd] = ss;
   }
+  freeaddrinfo(res);
+
+  if (state.size() == 0) {
+    eprintf("unable to bind\n");
+    return 1;
+  }
 
   int max_event_count = 4096;
   struct epoll_event *events = (struct epoll_event *)malloc(
@@ -233,6 +239,5 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  freeaddrinfo(res);
   return 0;
 }
