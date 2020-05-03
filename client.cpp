@@ -92,7 +92,15 @@ int main(int argc, char *argv[]) {
         perror("write");
         return 1;
       }
-      if (write_exact(fd, argv[5], 256) != 256) {
+      // copy to zero-init array to avoid leaking
+      char name[256] = {0};
+      char *remote_path = argv[5];
+      if (strlen(remote_path) > 256) {
+        eprintf("file name too long!\n");
+        return 1;
+      }
+      memcpy(name, remote_path, strlen(remote_path));
+      if (write_exact(fd, name, 256) != 256) {
         perror("write");
         return 1;
       }
