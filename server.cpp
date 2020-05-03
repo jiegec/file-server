@@ -8,6 +8,7 @@
 #include <string>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
 
@@ -15,10 +16,11 @@
 
 enum State {
   WaitForCommand,
-  WaitForNameLen,
   WaitForName,
   WaitForBodyLen,
-  WaitForBody
+  WaitForBody,
+  SendResp,
+  SendFile,
 };
 enum Command { Download, Upload };
 
@@ -28,9 +30,15 @@ struct SocketState {
   State state;
   Command current_command;
   std::vector<uint8_t> read_buffer;
-  int name_len;
   std::string name;
+  // resp header
+  std::vector<uint8_t> write_buffer;
+  int buffer_written;
+  // Download only
+  int file_fd;
+  // Upload only
   uint32_t body_len;
+  uint32_t written_len;
 };
 
 int read_exact(struct SocketState &state, size_t len) {
@@ -134,7 +142,7 @@ int main(int argc, char *argv[]) {
     // add to epoll
     struct epoll_event event;
     event.data.fd = fd;
-    event.events = EPOLLIN | EPOLLET;
+    event.events = EPOLLIN | EPOLLOUT | EPOLLET;
     if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event) < 0) {
       close(fd);
       perror("epoll_ctl");
@@ -178,7 +186,7 @@ int main(int argc, char *argv[]) {
         continue;
       }
 
-      if (events[i].events & EPOLLIN) {
+      if (state.find(events[i].data.fd) != state.cend()) {
         SocketState &s = state[events[i].data.fd];
         if (s.is_listen) {
           // accept all incoming sockets
@@ -244,6 +252,127 @@ int main(int argc, char *argv[]) {
           }
         } else {
           // client
+          // try to read/write as much as possible until EAGAIN/EWOUDLBLOCK
+          bool invalid = false;
+          for (;;) {
+            if (s.state == State::WaitForCommand) {
+              if (read_exact(s, 1) == 1) {
+                if (s.read_buffer[0] == 0x0) {
+                  s.current_command = Command::Download;
+                } else if (s.read_buffer[0] == 0x1) {
+                  s.current_command = Command::Upload;
+                } else {
+                  invalid = true;
+                  break;
+                }
+                s.state = State::WaitForName;
+              } else {
+                // can't read more
+                break;
+              }
+            }
+
+            if (s.state == State::WaitForName) {
+              int expected_len = 256 + 1;
+              read_exact(s, expected_len - s.read_buffer.size());
+              if (s.read_buffer.size() == expected_len) {
+                // got name
+                std::vector<char> temp;
+                temp.assign(&s.read_buffer[1], &s.read_buffer[expected_len]);
+                // append NUL if length of name is 256 bytes
+                temp.push_back(0);
+                s.name = temp.data();
+                if (s.current_command == Command::Upload) {
+                  // upload
+                  s.state = State::WaitForBodyLen;
+                  printf("user wants to upload %s\n", s.name.c_str());
+                } else {
+                  // download
+                  printf("user wants to download %s\n", s.name.c_str());
+                  int fd = open(s.name.c_str(), O_RDONLY);
+                  if (fd < 0) {
+                    eprintf("unable to open file: %s\n", s.name.c_str());
+                    // TODO: error handling
+                    break;
+                  } else {
+                    struct stat st;
+                    fstat(fd, &st);
+                    s.file_fd = fd;
+                    s.state = State::SendResp;
+                    s.write_buffer.clear();
+                    // download resp
+                    s.write_buffer.push_back(0x02);
+                    // length in big endian
+                    s.write_buffer.push_back((st.st_size >> 24) & 0xFF);
+                    s.write_buffer.push_back((st.st_size >> 16) & 0xFF);
+                    s.write_buffer.push_back((st.st_size >> 8) & 0xFF);
+                    s.write_buffer.push_back((st.st_size >> 0) & 0xFF);
+                    s.buffer_written = 0;
+                  }
+                }
+              } else {
+                // can't read more
+                break;
+              }
+            }
+
+            if (s.state == State::WaitForBodyLen) {
+              int expected_len = 4 + 256 + 1;
+              read_exact(s, expected_len - s.read_buffer.size());
+              if (s.read_buffer.size() == expected_len) {
+                // got body len
+                s.body_len = ntohl(*(uint32_t *)&s.read_buffer[256 + 1]);
+                s.written_len = 0;
+                s.state = State::WaitForBody;
+              } else {
+                // can't read more
+                break;
+              }
+            }
+
+            if (s.state == State::WaitForBody) {
+              if (s.body_len == s.written_len) {
+                // done, go to next request
+                s.state = State::WaitForCommand;
+              } else {
+                // TODO
+              }
+            }
+
+            if (s.state == State::SendResp) {
+              // send write_buffer to remote
+              while (s.buffer_written < s.write_buffer.size()) {
+                int written = write(s.fd, &s.write_buffer[s.buffer_written],
+                                    s.write_buffer.size() - s.buffer_written);
+                if (written < 0) {
+                  if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    break;
+                  }
+                  perror("write");
+                  break;
+                  // TODO: error handling
+                }
+                s.buffer_written += written;
+              }
+
+              if (s.buffer_written == s.write_buffer.size()) {
+                if (s.write_buffer.size() != 1) {
+                  // send file
+                  s.state = State::SendFile;
+                } else {
+                  // finish
+                  s.state = State::WaitForCommand;
+                }
+              }
+            }
+          }
+
+          // got invalid data
+          if (invalid) {
+            printf("client sent invalid data\n");
+            state.erase(events[i].data.fd);
+            close(events[i].data.fd);
+          }
         }
       }
 
