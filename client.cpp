@@ -1,3 +1,4 @@
+#include <netinet/tcp.h>
 #include <algorithm>
 #include <fcntl.h>
 #include <map>
@@ -10,6 +11,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <vector>
+#include "common.h"
 #define eprintf(...) fprintf(stderr, __VA_ARGS__)
 
 int read_exact(int fd, char *buffer, size_t len) {
@@ -24,6 +26,7 @@ int read_exact(int fd, char *buffer, size_t len) {
   return read_len;
 }
 
+
 int write_exact(int fd, char *buffer, size_t len) {
   size_t write_len = 0;
   while (write_len < len) {
@@ -37,15 +40,11 @@ int write_exact(int fd, char *buffer, size_t len) {
 }
 
 int main(int argc, char *argv[]) {
-  if (argc != 6) {
-    eprintf("Usage: %s addr port download|upload local_path remote_path\n",
+  if (argc < 6 || (argc % 2) == 1) {
+    eprintf("Usage: %s addr port download|upload local_path remote_path ... "
+            "[local_path] [remote_path]\n\tYou can specify one or more pairs "
+            "of (local_path, remote_path)",
             argv[0]);
-    return 1;
-  }
-
-  int file_fd = open(argv[4], O_WRONLY | O_CREAT, 0644);
-  if (file_fd < 0) {
-    perror("open");
     return 1;
   }
 
@@ -81,68 +80,86 @@ int main(int argc, char *argv[]) {
       close(fd);
       continue;
     }
+    tcp_nodelay(fd);
 
     printf("connected!\n");
     found = true;
 
     if (strcmp(argv[3], "download") == 0) {
       // download
-      // req
-      char action = 0x0;
-      if (write_exact(fd, &action, 1) != 1) {
-        perror("write");
-        return 1;
-      }
-      // copy to zero-init array to avoid leaking
-      char name[256] = {0};
-      char *remote_path = argv[5];
-      if (strlen(remote_path) > 256) {
-        eprintf("file name too long!\n");
-        return 1;
-      }
-      memcpy(name, remote_path, strlen(remote_path));
-      if (write_exact(fd, name, 256) != 256) {
-        perror("write");
-        return 1;
-      }
-      // resp
-      char resp = 0x0;
-      if (read_exact(fd, &resp, 1) != 1) {
-        perror("read");
-        return 1;
-      }
-      if (resp == 0x0) {
-        eprintf("server resp: download failed\n");
-        return 1;
-      } else if (resp == 0x2) {
-        uint32_t length;
-        if (read_exact(fd, (char *)&length, sizeof(length)) < 0) {
+      // beginfrom argv[4]
+      for (int offset = 4; offset < argc; offset += 2) {
+        int file_fd = open(argv[offset], O_WRONLY | O_CREAT, 0644);
+        if (file_fd < 0) {
+          eprintf("unable to open %s\n", argv[offset]);
+          perror("open");
+          continue;
+        }
+
+        // req
+        char action = 0x0;
+        printf("sending download action to server\n");
+        if (write_exact(fd, &action, 1) != 1) {
+          perror("write");
+          return 1;
+        }
+
+        // copy to zero-init array to avoid leaking
+        char name[256] = {0};
+        char *remote_path = argv[offset + 1];
+        if (strlen(remote_path) > 256) {
+          eprintf("file name too long!\n");
+          return 1;
+        }
+        memcpy(name, remote_path, strlen(remote_path));
+        printf("sending remote path to server\n");
+        if (write_exact(fd, name, 256) != 256) {
+          perror("write");
+          return 1;
+        }
+        // resp
+        char resp = 0x0;
+        printf("reading resp from server\n");
+        if (read_exact(fd, &resp, 1) != 1) {
           perror("read");
           return 1;
         }
-        length = ntohl(length);
-        printf("receiving file of length %d\n", length);
-        uint32_t read_len = 0;
-        char buffer[128];
-        while (read_len < length) {
-          int res = read(fd, buffer,
-                         std::min((uint32_t)sizeof(buffer), length - read_len));
-          if (res < 0) {
+        if (resp == 0x0) {
+          eprintf("server resp: download failed\n");
+          close(file_fd);
+          continue;
+        } else if (resp == 0x2) {
+          uint32_t length;
+          if (read_exact(fd, (char *)&length, sizeof(length)) < 0) {
             perror("read");
-            break;
+            return 1;
           }
-          read_len += res;
-          uint32_t write_len = 0;
-          while (write_len < res) {
-            int res2 = write(file_fd, buffer, res - write_len);
-            if (res2 < 0) {
-              perror("write");
+          length = ntohl(length);
+          printf("receiving file of length %d\n", length);
+          uint32_t read_len = 0;
+          char buffer[128];
+          while (read_len < length) {
+            int res =
+                read(fd, buffer,
+                     std::min((uint32_t)sizeof(buffer), length - read_len));
+            if (res < 0) {
+              perror("read");
               break;
             }
-            write_len += res2;
+            read_len += res;
+            uint32_t write_len = 0;
+            while (write_len < res) {
+              int res2 = write(file_fd, buffer, res - write_len);
+              if (res2 < 0) {
+                perror("write");
+                break;
+              }
+              write_len += res2;
+            }
           }
+          printf("written to %s\n", argv[4]);
+          close(file_fd);
         }
-        printf("written to %s\n", argv[4]);
       }
     } else if (strcmp(argv[3], "upload") == 0) {
       // upload

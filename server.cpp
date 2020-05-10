@@ -1,7 +1,9 @@
+#include "common.h"
 #include <algorithm>
 #include <fcntl.h>
 #include <map>
 #include <netdb.h>
+#include <netinet/tcp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -108,10 +110,9 @@ int main(int argc, char *argv[]) {
     }
 
     // set reuseaddr
-    int on = 1;
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) < 0) {
+    if (!so_reuseaddr(fd)) {
+      // fail
       close(fd);
-      perror("setsockopt");
       continue;
     }
 
@@ -130,16 +131,9 @@ int main(int argc, char *argv[]) {
     }
 
     // set non blocking
-    int flags = fcntl(fd, F_GETFL, 0);
-    if (flags < 0) {
+    if (!nonblocking(fd)) {
+      // error
       close(fd);
-      perror("fcntl");
-      continue;
-    }
-    flags |= O_NONBLOCK;
-    if (fcntl(fd, F_SETFL, flags) < 0) {
-      close(fd);
-      perror("fcntl");
       continue;
     }
 
@@ -211,18 +205,12 @@ int main(int argc, char *argv[]) {
             }
 
             // set non blocking
-            int flags = fcntl(fd, F_GETFL, 0);
-            if (flags < 0) {
+            if (!nonblocking(fd)) {
+              // error
               close(fd);
-              perror("fcntl");
               continue;
             }
-            flags |= O_NONBLOCK;
-            if (fcntl(fd, F_SETFL, flags) < 0) {
-              close(fd);
-              perror("fcntl");
-              continue;
-            }
+            tcp_nodelay(fd);
 
             // print info
             char hbuf[NI_MAXHOST];
@@ -259,6 +247,7 @@ int main(int argc, char *argv[]) {
           // try to read/write as much as possible until EAGAIN/EWOUDLBLOCK
           bool invalid = false;
           for (;;) {
+            printf("state at %d\n", s.state);
             if (s.state == State::WaitForCommand) {
               if (read_exact(s, 1) == 1) {
                 if (s.read_buffer[0] == 0x0) {
@@ -289,10 +278,10 @@ int main(int argc, char *argv[]) {
                 if (s.current_command == Command::Upload) {
                   // upload
                   s.state = State::WaitForBodyLen;
-                  printf("user wants to upload %s\n", s.name.c_str());
+                  printf("user wants to upload: %s\n", s.name.c_str());
                 } else {
                   // download
-                  printf("user wants to download %s\n", s.name.c_str());
+                  printf("user wants to download: %s\n", s.name.c_str());
                   int fd = open(s.name.c_str(), O_RDONLY);
                   if (fd < 0) {
                     eprintf("unable to open file: %s\n", s.name.c_str());
@@ -375,8 +364,10 @@ int main(int argc, char *argv[]) {
                 int res = sendfile(s.fd, s.file_fd, NULL, 0xFFFFFFFF);
                 if (res == 0) {
                   // EOF
+                  printf("complete sending file to client\n");
                   close(s.file_fd);
                   s.state = State::WaitForCommand;
+                  s.read_buffer.clear();
                   break;
                 } else if (res < 0) {
                   if (errno == EAGAIN || errno == EWOULDBLOCK) {
