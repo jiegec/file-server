@@ -358,7 +358,7 @@ int main(int argc, char *argv[]) {
               }
 
               if (s.buffer_written == s.write_buffer.size()) {
-                // s.read_buffer.clear();
+                s.read_buffer.clear();
                 if (s.write_buffer.size() != 1) {
                   // send file
                   s.state = State::SendFile;
