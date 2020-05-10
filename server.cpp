@@ -4,6 +4,7 @@
 #include <map>
 #include <netdb.h>
 #include <netinet/tcp.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -72,6 +73,9 @@ int main(int argc, char *argv[]) {
 
   // fd states
   std::map<int, SocketState> state;
+
+  // ignore SIGPIPE because we use epoll to handle it
+  signal(SIGPIPE, SIG_IGN);
 
   // setup epoll
   int epoll_fd = epoll_create1(0);
@@ -285,8 +289,13 @@ int main(int argc, char *argv[]) {
                   int fd = open(s.name.c_str(), O_RDONLY);
                   if (fd < 0) {
                     eprintf("unable to open file: %s\n", s.name.c_str());
-                    // TODO: error handling
-                    break;
+
+                    // error handling
+                    s.write_buffer.clear();
+                    // error resp
+                    s.write_buffer.push_back(0x00);
+                    s.buffer_written = 0;
+                    s.state = State::SendResp;
                   } else {
                     struct stat st;
                     fstat(fd, &st);
@@ -349,6 +358,7 @@ int main(int argc, char *argv[]) {
               }
 
               if (s.buffer_written == s.write_buffer.size()) {
+                // s.read_buffer.clear();
                 if (s.write_buffer.size() != 1) {
                   // send file
                   s.state = State::SendFile;

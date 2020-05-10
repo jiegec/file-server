@@ -1,8 +1,9 @@
-#include <netinet/tcp.h>
+#include "common.h"
 #include <algorithm>
 #include <fcntl.h>
 #include <map>
 #include <netdb.h>
+#include <netinet/tcp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,7 +12,6 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <vector>
-#include "common.h"
 #define eprintf(...) fprintf(stderr, __VA_ARGS__)
 
 int read_exact(int fd, char *buffer, size_t len) {
@@ -25,7 +25,6 @@ int read_exact(int fd, char *buffer, size_t len) {
   }
   return read_len;
 }
-
 
 int write_exact(int fd, char *buffer, size_t len) {
   size_t write_len = 0;
@@ -58,6 +57,8 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
+  int ret = 0;
+
   bool found = false;
   for (struct addrinfo *p = res; p != NULL; p = p->ai_next) {
     // print info
@@ -80,14 +81,17 @@ int main(int argc, char *argv[]) {
       close(fd);
       continue;
     }
+    // no delay
     tcp_nodelay(fd);
+    // 3s recv timeout
+    so_recv_timeout(fd, 3000000);
 
     printf("connected!\n");
     found = true;
 
     if (strcmp(argv[3], "download") == 0) {
       // download
-      // beginfrom argv[4]
+      // begin from argv[4]
       for (int offset = 4; offset < argc; offset += 2) {
         int file_fd = open(argv[offset], O_WRONLY | O_CREAT, 0644);
         if (file_fd < 0) {
@@ -101,7 +105,8 @@ int main(int argc, char *argv[]) {
         printf("sending download action to server\n");
         if (write_exact(fd, &action, 1) != 1) {
           perror("write");
-          return 1;
+          ret = 1;
+          goto quit;
         }
 
         // copy to zero-init array to avoid leaking
@@ -109,20 +114,24 @@ int main(int argc, char *argv[]) {
         char *remote_path = argv[offset + 1];
         if (strlen(remote_path) > 256) {
           eprintf("file name too long!\n");
-          return 1;
+          ret = 1;
+          goto quit;
         }
         memcpy(name, remote_path, strlen(remote_path));
         printf("sending remote path to server\n");
         if (write_exact(fd, name, 256) != 256) {
           perror("write");
-          return 1;
+          ret = 1;
+          goto quit;
         }
+
         // resp
         char resp = 0x0;
         printf("reading resp from server\n");
         if (read_exact(fd, &resp, 1) != 1) {
           perror("read");
-          return 1;
+          ret = 1;
+          goto quit;
         }
         if (resp == 0x0) {
           eprintf("server resp: download failed\n");
@@ -132,7 +141,8 @@ int main(int argc, char *argv[]) {
           uint32_t length;
           if (read_exact(fd, (char *)&length, sizeof(length)) < 0) {
             perror("read");
-            return 1;
+            ret = 1;
+            goto quit;
           }
           length = ntohl(length);
           printf("receiving file of length %d\n", length);
@@ -170,9 +180,10 @@ int main(int argc, char *argv[]) {
     close(fd);
     break;
   }
+quit:
   freeaddrinfo(res);
   if (!found) {
     eprintf("can not connect to server\n");
   }
-  return 0;
+  return ret;
 }

@@ -37,3 +37,12 @@ bool nonblocking(int fd) {
   }
   return true;
 }
+
+bool so_recv_timeout(int fd, int usec) {
+  struct timeval timeout = {usec / 1000000, usec % 1000000};
+  if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
+    perror("setsockopt when setting recv timeout");
+    return false;
+  }
+  return true;
+}

@@ -4,5 +4,6 @@
 bool tcp_nodelay(int fd);
 bool so_reuseaddr(int fd);
 bool nonblocking(int fd);
+bool so_recv_timeout(int fd, int usec);
 
 #endif
