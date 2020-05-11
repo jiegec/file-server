@@ -282,7 +282,8 @@ int main(int argc, char *argv[]) {
                 if (s.current_command == Command::Upload) {
                   // upload
                   printf("user wants to upload: %s\n", s.file_name.c_str());
-                  int fd = open(s.file_name.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                  int fd = open(s.file_name.c_str(),
+                                O_WRONLY | O_CREAT | O_TRUNC, 0644);
                   if (fd < 0) {
                     eprintf("unable to open file: %s\n", s.file_name.c_str());
 

@@ -40,10 +40,11 @@ int write_exact(int fd, char *buffer, size_t len) {
 }
 
 int main(int argc, char *argv[]) {
-  if (argc < 6 || (argc % 2) == 1) {
-    eprintf("Usage: %s addr port download|upload local_path remote_path ... "
-            "[local_path] [remote_path]\n\tYou can specify one or more pairs "
-            "of (local_path, remote_path)",
+  if (argc < 6 || (argc % 3) != 0) {
+    eprintf("Usage: %s addr port [actions]"
+            "\n\tactions: You should specify one or more pairs "
+            "of (action, local_path, remote_path) where action is one of: "
+            "download and upload",
             argv[0]);
     return 1;
   }
@@ -90,11 +91,12 @@ int main(int argc, char *argv[]) {
     printf("connected!\n");
     found = true;
 
-    if (strcmp(argv[3], "download") == 0) {
-      // download
-      // begin from argv[4]
-      for (int offset = 4; offset < argc; offset += 2) {
-        int file_fd = open(argv[offset], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    // begin from argv[3]
+    for (int offset = 3; offset < argc; offset += 3) {
+      if (strcmp(argv[offset], "download") == 0) {
+        // download
+        int file_fd =
+            open(argv[offset + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (file_fd < 0) {
           eprintf("unable to open %s\n", argv[offset]);
           perror("open");
@@ -112,7 +114,7 @@ int main(int argc, char *argv[]) {
 
         // copy to zero-init array to avoid leaking
         char name[256] = {0};
-        char *remote_path = argv[offset + 1];
+        char *remote_path = argv[offset + 2];
         if (strlen(remote_path) > 256) {
           eprintf("file name too long!\n");
           ret = 1;
@@ -171,12 +173,9 @@ int main(int argc, char *argv[]) {
           printf("written to %s\n", argv[4]);
           close(file_fd);
         }
-      }
-    } else if (strcmp(argv[3], "upload") == 0) {
-      // upload
-      // begin from argv[4]
-      for (int offset = 4; offset < argc; offset += 2) {
-        int file_fd = open(argv[offset], O_RDONLY);
+      } else if (strcmp(argv[offset], "upload") == 0) {
+        // upload
+        int file_fd = open(argv[offset + 1], O_RDONLY);
         if (file_fd < 0) {
           eprintf("unable to open %s\n", argv[offset]);
           perror("open");
@@ -194,7 +193,7 @@ int main(int argc, char *argv[]) {
 
         // copy to zero-init array to avoid leaking
         char name[256] = {0};
-        char *remote_path = argv[offset + 1];
+        char *remote_path = argv[offset + 2];
         if (strlen(remote_path) > 256) {
           eprintf("file name too long!\n");
           ret = 1;
@@ -211,6 +210,12 @@ int main(int argc, char *argv[]) {
         // send file size
         struct stat st;
         fstat(file_fd, &st);
+        if (st.st_size > 0xFFFFFFFF) {
+          // too large to fit in 4 bytes length
+          eprintf("file is too large to upload");
+          ret = 1;
+          goto quit;
+        }
         char file_len[4];
         // big endian
         file_len[0] = st.st_size >> 24;
@@ -263,9 +268,9 @@ int main(int argc, char *argv[]) {
           eprintf("server resp: download failed\n");
           continue;
         }
+      } else {
+        printf("unsupported action: %s\n", argv[3]);
       }
-    } else {
-      printf("unsupported action: %s\n", argv[3]);
     }
 
     close(fd);
