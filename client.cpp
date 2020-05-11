@@ -10,6 +10,7 @@
 #include <string>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
 #define eprintf(...) fprintf(stderr, __VA_ARGS__)
@@ -93,7 +94,7 @@ int main(int argc, char *argv[]) {
       // download
       // begin from argv[4]
       for (int offset = 4; offset < argc; offset += 2) {
-        int file_fd = open(argv[offset], O_WRONLY | O_CREAT, 0644);
+        int file_fd = open(argv[offset], O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (file_fd < 0) {
           eprintf("unable to open %s\n", argv[offset]);
           perror("open");
@@ -173,6 +174,96 @@ int main(int argc, char *argv[]) {
       }
     } else if (strcmp(argv[3], "upload") == 0) {
       // upload
+      // begin from argv[4]
+      for (int offset = 4; offset < argc; offset += 2) {
+        int file_fd = open(argv[offset], O_RDONLY);
+        if (file_fd < 0) {
+          eprintf("unable to open %s\n", argv[offset]);
+          perror("open");
+          continue;
+        }
+
+        // req
+        char action = 0x01;
+        printf("sending upload action to server\n");
+        if (write_exact(fd, &action, 1) != 1) {
+          perror("write");
+          ret = 1;
+          goto quit;
+        }
+
+        // copy to zero-init array to avoid leaking
+        char name[256] = {0};
+        char *remote_path = argv[offset + 1];
+        if (strlen(remote_path) > 256) {
+          eprintf("file name too long!\n");
+          ret = 1;
+          goto quit;
+        }
+        memcpy(name, remote_path, strlen(remote_path));
+        printf("sending remote path to server\n");
+        if (write_exact(fd, name, 256) != 256) {
+          perror("write");
+          ret = 1;
+          goto quit;
+        }
+
+        // send file size
+        struct stat st;
+        fstat(file_fd, &st);
+        char file_len[4];
+        // big endian
+        file_len[0] = st.st_size >> 24;
+        file_len[1] = st.st_size >> 16;
+        file_len[2] = st.st_size >> 8;
+        file_len[3] = st.st_size;
+        printf("sending file size %d to server\n", st.st_size);
+        if (write_exact(fd, file_len, 4) != 4) {
+          perror("write");
+          ret = 1;
+          goto quit;
+        }
+
+        // sending file content
+        uint32_t length = st.st_size;
+        uint32_t read_len = 0;
+        char buffer[128];
+        while (read_len < length) {
+          int res = read(file_fd, buffer,
+                         std::min((uint32_t)sizeof(buffer), length - read_len));
+          if (res < 0) {
+            perror("read");
+            ret = 1;
+            goto quit;
+          }
+          read_len += res;
+          uint32_t write_len = 0;
+          while (write_len < res) {
+            int res2 = write(fd, buffer, res - write_len);
+            if (res2 < 0) {
+              perror("write");
+              ret = 1;
+              goto quit;
+            }
+            write_len += res2;
+          }
+        }
+        close(file_fd);
+
+        // resp
+        char resp = 0x0;
+        printf("reading resp from server\n");
+        if (read_exact(fd, &resp, 1) != 1) {
+          perror("read");
+          ret = 1;
+          goto quit;
+        }
+
+        if (resp == 0x0) {
+          eprintf("server resp: download failed\n");
+          continue;
+        }
+      }
     } else {
       printf("unsupported action: %s\n", argv[3]);
     }

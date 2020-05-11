@@ -34,7 +34,7 @@ struct SocketState {
   State state;
   Command current_command;
   std::vector<uint8_t> read_buffer;
-  std::string name;
+  std::string file_name;
   // resp header
   std::vector<uint8_t> write_buffer;
   int buffer_written;
@@ -250,8 +250,8 @@ int main(int argc, char *argv[]) {
           // client
           // try to read/write as much as possible until EAGAIN/EWOUDLBLOCK
           bool invalid = false;
-          for (;;) {
-            printf("state at %d\n", s.state);
+          while (!invalid) {
+            // printf("state at %d\n", s.state);
             if (s.state == State::WaitForCommand) {
               if (read_exact(s, 1) == 1) {
                 if (s.read_buffer[0] == 0x0) {
@@ -278,17 +278,30 @@ int main(int argc, char *argv[]) {
                 temp.assign(&s.read_buffer[1], &s.read_buffer[expected_len]);
                 // append NUL if length of name is 256 bytes
                 temp.push_back(0);
-                s.name = temp.data();
+                s.file_name = temp.data();
                 if (s.current_command == Command::Upload) {
                   // upload
-                  s.state = State::WaitForBodyLen;
-                  printf("user wants to upload: %s\n", s.name.c_str());
+                  printf("user wants to upload: %s\n", s.file_name.c_str());
+                  int fd = open(s.file_name.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                  if (fd < 0) {
+                    eprintf("unable to open file: %s\n", s.file_name.c_str());
+
+                    // error handling
+                    s.write_buffer.clear();
+                    // error resp
+                    s.write_buffer.push_back(0x00);
+                    s.buffer_written = 0;
+                    s.state = State::SendResp;
+                  } else {
+                    s.file_fd = fd;
+                    s.state = State::WaitForBodyLen;
+                  }
                 } else {
                   // download
-                  printf("user wants to download: %s\n", s.name.c_str());
-                  int fd = open(s.name.c_str(), O_RDONLY);
+                  printf("user wants to download: %s\n", s.file_name.c_str());
+                  int fd = open(s.file_name.c_str(), O_RDONLY);
                   if (fd < 0) {
-                    eprintf("unable to open file: %s\n", s.name.c_str());
+                    eprintf("unable to open file: %s\n", s.file_name.c_str());
 
                     // error handling
                     s.write_buffer.clear();
@@ -324,6 +337,7 @@ int main(int argc, char *argv[]) {
               if (s.read_buffer.size() == expected_len) {
                 // got body len
                 s.body_len = ntohl(*(uint32_t *)&s.read_buffer[256 + 1]);
+                printf("receiving file of size %d\n", s.body_len);
                 s.written_len = 0;
                 s.state = State::WaitForBody;
               } else {
@@ -333,11 +347,40 @@ int main(int argc, char *argv[]) {
             }
 
             if (s.state == State::WaitForBody) {
+              char buffer[128];
+              while (s.written_len < s.body_len && !invalid) {
+                int res = read(s.fd, buffer,
+                               std::min((uint32_t)sizeof(buffer),
+                                        s.body_len - s.written_len));
+                if (res == EAGAIN || res == EWOULDBLOCK) {
+                  break;
+                } else if (res < 0) {
+                  perror("read");
+                  invalid = true;
+                  break;
+                }
+                s.written_len += res;
+
+                uint32_t write_len = 0;
+                while (write_len < res) {
+                  int res2 = write(s.file_fd, buffer, res - write_len);
+                  if (res2 < 0) {
+                    perror("write");
+                    invalid = true;
+                    break;
+                  }
+                  write_len += res2;
+                }
+              }
               if (s.body_len == s.written_len) {
-                // done, go to next request
-                s.state = State::WaitForCommand;
-              } else {
-                // TODO
+                // close file
+                close(s.file_fd);
+                // done, send resp
+                s.state = State::SendResp;
+                s.buffer_written = 0;
+                s.write_buffer.clear();
+                // upload resp
+                s.write_buffer.push_back(0x01);
               }
             }
 
@@ -392,7 +435,7 @@ int main(int argc, char *argv[]) {
 
           // got invalid data
           if (invalid) {
-            printf("client sent invalid data\n");
+            printf("client sent invalid data, closing\n");
             state.erase(events[i].data.fd);
             close(events[i].data.fd);
           }
