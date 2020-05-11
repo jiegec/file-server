@@ -114,3 +114,12 @@ written to temp3
 ```
 
 注意下载的时候文件顺序也是先本地后对端。
+
+### 套接字设置
+
+除了常规的为了用于 epoll 必须使用的 non blocking 选项以外，还对套接字进行了这些参数的设置：
+
+1. SO_REUSEADDR 用于监听端口
+2. TCP_NODELAY
+
+另外也把 SIGPIPE 设置为了 SIG_IGN，并在 epoll 里面处理了套接字关闭的情况。因为没有子进程，所以不用考虑 SIGCHLD 的处理。
