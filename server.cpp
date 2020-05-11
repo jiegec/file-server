@@ -232,7 +232,7 @@ int main(int argc, char *argv[]) {
             // add to epoll
             struct epoll_event event;
             event.data.fd = fd;
-            event.events = EPOLLIN | EPOLLRDHUP | EPOLLET;
+            event.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET;
             if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event) < 0) {
               close(fd);
               perror("epoll_ctl");
@@ -288,11 +288,8 @@ int main(int argc, char *argv[]) {
                     eprintf("unable to open file: %s\n", s.file_name.c_str());
 
                     // error handling
-                    s.write_buffer.clear();
-                    // error resp
-                    s.write_buffer.push_back(0x00);
-                    s.buffer_written = 0;
-                    s.state = State::SendResp;
+                    s.file_fd = -1;
+                    s.state = State::WaitForBodyLen;
                   } else {
                     s.file_fd = fd;
                     s.state = State::WaitForBodyLen;
@@ -374,26 +371,38 @@ int main(int argc, char *argv[]) {
                 }
                 s.written_len += res;
 
-                uint32_t write_len = 0;
-                while (write_len < res) {
-                  int res2 = write(s.file_fd, buffer, res - write_len);
-                  if (res2 < 0) {
-                    perror("write");
-                    invalid = true;
-                    break;
+                // write to file when applicable
+                if (s.file_fd >= 0) {
+                  uint32_t write_len = 0;
+                  while (write_len < res) {
+                    int res2 = write(s.file_fd, buffer, res - write_len);
+                    if (res2 < 0) {
+                      perror("write");
+                      invalid = true;
+                      break;
+                    }
+                    write_len += res2;
                   }
-                  write_len += res2;
                 }
               }
               if (s.body_len == s.written_len) {
-                // close file
-                close(s.file_fd);
-                // done, send resp
-                s.state = State::SendResp;
-                s.buffer_written = 0;
-                s.write_buffer.clear();
-                // upload resp
-                s.write_buffer.push_back(0x01);
+                if (s.file_fd == -1) {
+                  // upload failed
+                  s.write_buffer.clear();
+                  // error resp
+                  s.write_buffer.push_back(0x00);
+                  s.buffer_written = 0;
+                  s.state = State::SendResp;
+                } else {
+                  // close file
+                  close(s.file_fd);
+                  // done, send resp
+                  s.state = State::SendResp;
+                  s.buffer_written = 0;
+                  s.write_buffer.clear();
+                  // upload resp
+                  s.write_buffer.push_back(0x01);
+                }
               }
             }
 

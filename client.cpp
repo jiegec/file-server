@@ -44,7 +44,7 @@ int main(int argc, char *argv[]) {
     eprintf("Usage: %s addr port [actions]"
             "\n\tactions: You should specify one or more pairs "
             "of (action, local_path, remote_path) where action is one of: "
-            "download and upload",
+            "download and upload\n",
             argv[0]);
     return 1;
   }
@@ -170,7 +170,7 @@ int main(int argc, char *argv[]) {
               write_len += res2;
             }
           }
-          printf("written to %s\n", argv[4]);
+          printf("written to %s\n", argv[offset + 1]);
           close(file_fd);
         }
       } else if (strcmp(argv[offset], "upload") == 0) {
@@ -265,11 +265,11 @@ int main(int argc, char *argv[]) {
         }
 
         if (resp == 0x0) {
-          eprintf("server resp: download failed\n");
+          eprintf("server resp: upload failed\n");
           continue;
         }
       } else {
-        printf("unsupported action: %s\n", argv[3]);
+        printf("unsupported action: %s\n", argv[offset]);
       }
     }
 
