@@ -313,17 +313,29 @@ int main(int argc, char *argv[]) {
                   } else {
                     struct stat st;
                     fstat(fd, &st);
-                    s.file_fd = fd;
-                    s.state = State::SendResp;
-                    s.write_buffer.clear();
-                    // download resp
-                    s.write_buffer.push_back(0x02);
-                    // length in big endian
-                    s.write_buffer.push_back((st.st_size >> 24) & 0xFF);
-                    s.write_buffer.push_back((st.st_size >> 16) & 0xFF);
-                    s.write_buffer.push_back((st.st_size >> 8) & 0xFF);
-                    s.write_buffer.push_back((st.st_size >> 0) & 0xFF);
-                    s.buffer_written = 0;
+
+                    // 4GiB handling
+                    if (st.st_size > 0xFFFFFFFF) {
+                      // error handling
+                      s.write_buffer.clear();
+                      // error resp
+                      s.write_buffer.push_back(0x00);
+                      s.buffer_written = 0;
+                      s.state = State::SendResp;
+                      close(fd);
+                    } else {
+                      s.file_fd = fd;
+                      s.state = State::SendResp;
+                      s.write_buffer.clear();
+                      // download resp
+                      s.write_buffer.push_back(0x02);
+                      // length in big endian
+                      s.write_buffer.push_back((st.st_size >> 24) & 0xFF);
+                      s.write_buffer.push_back((st.st_size >> 16) & 0xFF);
+                      s.write_buffer.push_back((st.st_size >> 8) & 0xFF);
+                      s.write_buffer.push_back((st.st_size >> 0) & 0xFF);
+                      s.buffer_written = 0;
+                    }
                   }
                 }
               } else {
